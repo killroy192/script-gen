@@ -4,8 +4,8 @@
   "scripts": {
     "generate": "ts-node index.ts"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "Dzmitry Lahunouski",
+  "license": "MIT",
   "description": "",
   "devDependencies": {
     "@types/node": "^24.0.8",

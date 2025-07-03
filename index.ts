@@ -6,13 +6,9 @@ import { Worker } from "worker_threads";
 // Performance configuration
 const PERFORMANCE_CONFIG = {
   // Number of rows to process when reading Excel
-  EXCEL_READ_BATCH_SIZE: parseInt(process.env.EXCEL_READ_BATCH_SIZE || "2000"),
-  // Number of rows to write to Excel at once
-  EXCEL_WRITE_BATCH_SIZE: parseInt(
-    process.env.EXCEL_WRITE_BATCH_SIZE || "2000"
-  ),
+  BATCH_SIZE: 1000,
   // Show progress indicators for datasets larger than this
-  NUM_THREADS: parseInt(process.env.NUM_THREADS || "4"),
+  NUM_THREADS: 4,
 };
 
 // Get seed phrase from environment variable
@@ -179,7 +175,7 @@ async function exportToXlsx(data: any[]) {
   }
 
   // Add data rows in batches for better performance
-  const batchSize = PERFORMANCE_CONFIG.EXCEL_WRITE_BATCH_SIZE;
+  const batchSize = PERFORMANCE_CONFIG.BATCH_SIZE;
   for (let i = 0; i < data.length; i += batchSize) {
     const batch = data.slice(i, i + batchSize);
 
@@ -200,7 +196,7 @@ async function exportToXlsx(data: any[]) {
 
 // Pipeline approach: read and process in batches
 async function processCustomerIdsInBatches(): Promise<any[]> {
-  const batchSize = PERFORMANCE_CONFIG.EXCEL_READ_BATCH_SIZE;
+  const batchSize = PERFORMANCE_CONFIG.BATCH_SIZE;
   const allResults: any[] = [];
   let batchNumber = 0;
 

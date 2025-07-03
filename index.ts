@@ -1,6 +1,23 @@
-import { CustomerWalletService } from "./src/CustomerWalletService";
 import * as ExcelJS from "exceljs";
 import "dotenv/config";
+import { Worker } from "worker_threads";
+
+// Performance configuration
+const PERFORMANCE_CONFIG = {
+  // Number of customer IDs to process in parallel
+  WALLET_GENERATION_BATCH_SIZE: parseInt(
+    process.env.WALLET_BATCH_SIZE || "100"
+  ),
+  // Number of rows to process when reading Excel
+  EXCEL_READ_BATCH_SIZE: parseInt(process.env.EXCEL_READ_BATCH_SIZE || "1000"),
+  // Number of rows to write to Excel at once
+  EXCEL_WRITE_BATCH_SIZE: parseInt(
+    process.env.EXCEL_WRITE_BATCH_SIZE || "1000"
+  ),
+  // Show progress indicators for datasets larger than this
+  PROGRESS_THRESHOLD: parseInt(process.env.PROGRESS_THRESHOLD || "1000"),
+  NUM_THREADS: parseInt(process.env.NUM_THREADS || "4"),
+};
 
 // Get seed phrase from environment variable
 const seed_phrase = process.env.CUSTOMERS_HDNODE_WALLET_PHRASE;
@@ -10,10 +27,6 @@ if (!seed_phrase) {
     "CUSTOMERS_HDNODE_WALLET_PHRASE environment variable is not set in .env file"
   );
 }
-
-const customerWalletService = new CustomerWalletService(seed_phrase);
-
-const customerToWalletMap: { [key: string]: string } = {};
 
 // Read input.xlsx file
 async function readCustomerIds(): Promise<string[]> {
@@ -27,7 +40,6 @@ async function readCustomerIds(): Promise<string[]> {
     }
 
     // Extract customer IDs from the data
-    // Assuming the column name is 'Customer ID' or 'customerId' or similar
     const customerIds: string[] = [];
 
     // Get headers from the first row
@@ -60,18 +72,25 @@ async function readCustomerIds(): Promise<string[]> {
       );
     }
 
-    // Read customer IDs from the column
-    worksheet.eachRow((row: ExcelJS.Row, rowNumber: number) => {
-      if (rowNumber > 1) {
-        // Skip header row
-        const cell = row.getCell(customerIdColumnIndex);
-        const customerId = cell.value?.toString();
+    // Read customer IDs from the column - optimized for performance
+    const totalRows = worksheet.rowCount;
+    console.log(`Reading ${totalRows - 1} rows from Excel file...`);
 
-        if (customerId && customerId.trim()) {
-          customerIds.push(customerId.trim());
-        }
+    // Use a more efficient approach for large datasets
+    for (let rowNumber = 2; rowNumber <= totalRows; rowNumber++) {
+      const row = worksheet.getRow(rowNumber);
+      const cell = row.getCell(customerIdColumnIndex);
+      const customerId = cell.value?.toString();
+
+      if (customerId && customerId.trim()) {
+        customerIds.push(customerId.trim());
       }
-    });
+
+      // Progress indicator for large files
+      if (totalRows > 1000 && rowNumber % 1000 === 0) {
+        console.log(`Read ${rowNumber}/${totalRows} rows...`);
+      }
+    }
 
     if (customerIds.length === 0) {
       throw new Error(
@@ -87,41 +106,42 @@ async function readCustomerIds(): Promise<string[]> {
   }
 }
 
-// Generate wallet addresses for all customer IDs
-function generateWallets(customerIds: string[]): any[] {
-  const results = [];
+// Generate wallet addresses for all customer IDs using worker threads
+async function generateWallets(customerIds: string[]): Promise<any[]> {
+  const numThreads = PERFORMANCE_CONFIG.NUM_THREADS;
+  const batchSize = Math.ceil(customerIds.length / numThreads);
+  const seedPhrase = process.env.CUSTOMERS_HDNODE_WALLET_PHRASE;
+  const workerPath = require("path").resolve(
+    __dirname,
+    "../dist/src/walletWorker.js"
+  );
 
-  for (let i = 0; i < customerIds.length; i++) {
-    const customerId = customerIds[i];
-    try {
-      if (customerToWalletMap[customerId]) {
-        throw new Error(`Duplicated Customer ID`);
-      }
-      const walletAddress =
-        customerWalletService.getCustomerWalletAddress(customerId);
-      customerToWalletMap[customerId] = walletAddress;
-      results.push({
-        "Customer ID": customerId,
-        "Wallet Address": walletAddress,
-      });
-    } catch (error) {
-      console.error(
-        `Error generating wallet for customer ID ${customerId}:`,
-        error
-      );
-      results.push({
-        "Customer ID": customerId,
-        "Wallet Address": "ERROR",
-        Error: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
+  const promises: Promise<any[]>[] = [];
+  for (let i = 0; i < customerIds.length; i += batchSize) {
+    const batch = customerIds.slice(i, i + batchSize);
+    promises.push(
+      new Promise((resolve, reject) => {
+        const worker = new Worker(workerPath, {
+          workerData: { customerIds: batch, seedPhrase },
+        });
+        worker.on("message", resolve);
+        worker.on("error", reject);
+        worker.on("exit", (code) => {
+          if (code !== 0)
+            reject(new Error(`Worker stopped with exit code ${code}`));
+        });
+      })
+    );
   }
-
+  // Wait for all workers to finish and flatten results
+  const results = (await Promise.all(promises)).flat();
   return results;
 }
 
 // Export results to output.xlsx
 async function exportToXlsx(data: any[]) {
+  console.log(`Exporting ${data.length} records to Excel...`);
+
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Customer Wallets");
 
@@ -131,11 +151,29 @@ async function exportToXlsx(data: any[]) {
     worksheet.addRow(headers);
   }
 
-  // Add data rows
-  data.forEach((row) => {
-    const rowData = Object.values(row);
-    worksheet.addRow(rowData);
-  });
+  // Add data rows in batches for better performance
+  const batchSize = PERFORMANCE_CONFIG.EXCEL_WRITE_BATCH_SIZE;
+  for (let i = 0; i < data.length; i += batchSize) {
+    const batch = data.slice(i, i + batchSize);
+
+    // Add rows in batch
+    batch.forEach((row) => {
+      const rowData = Object.values(row);
+      worksheet.addRow(rowData);
+    });
+
+    // Progress indicator for large datasets
+    if (
+      data.length > PERFORMANCE_CONFIG.PROGRESS_THRESHOLD &&
+      i % PERFORMANCE_CONFIG.PROGRESS_THRESHOLD === 0
+    ) {
+      console.log(
+        `Exported ${Math.min(i + batchSize, data.length)}/${
+          data.length
+        } records...`
+      );
+    }
+  }
 
   // Write to file
   const filename = "output.xlsx";
@@ -153,7 +191,7 @@ async function main() {
   const customerIds = await readCustomerIds();
 
   // Generate wallets for all customers
-  const results = generateWallets(customerIds);
+  const results = await generateWallets(customerIds);
 
   // Export results to output file
   await exportToXlsx(results);

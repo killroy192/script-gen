@@ -2,6 +2,26 @@ import { CustomerWalletService } from "./src/CustomerWalletService";
 import * as ExcelJS from "exceljs";
 import "dotenv/config";
 import { Worker } from "worker_threads";
+import * as path from "path";
+import * as fs from "fs";
+
+// Parse command line arguments
+const args = process.argv.slice(2);
+if (args.length === 0) {
+  console.error("Usage: npm run generate <input-file-path>");
+  console.error("Example: npm run generate ./data/customers.xlsx");
+  process.exit(1);
+}
+
+const inputFilePath = args[0];
+
+// Validate input file exists
+if (!fs.existsSync(inputFilePath)) {
+  console.error(`Error: Input file '${inputFilePath}' does not exist.`);
+  process.exit(1);
+}
+
+console.log(`Using input file: ${inputFilePath}`);
 
 // Performance configuration
 const PERFORMANCE_CONFIG = {
@@ -23,7 +43,7 @@ if (!seed_phrase) {
 // Read input.xlsx file using streaming for better performance
 async function readCustomerIds(): Promise<string[]> {
   try {
-    const workbook = new ExcelJS.stream.xlsx.WorkbookReader("input.xlsx", {});
+    const workbook = new ExcelJS.stream.xlsx.WorkbookReader(inputFilePath, {});
     const customerIds: string[] = [];
     let headers: string[] = [];
     let customerIdColumnIndex = -1;
@@ -157,11 +177,12 @@ async function generateWallets(customerIds: string[]): Promise<any[]> {
 }
 
 // Export results to output.xlsx using streaming for better performance
-async function exportToXlsx(data: any[]) {
+async function exportToXlsx(data: any[], outputFilename?: string) {
+  const filename = outputFilename || "output.xlsx";
   console.log(`Exporting ${data.length} records to Excel using streaming...`);
 
   const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
-    filename: "output.xlsx",
+    filename: filename,
     useStyles: false,
     useSharedStrings: false,
   });
@@ -190,7 +211,7 @@ async function exportToXlsx(data: any[]) {
   await worksheet.commit();
   await workbook.commit();
 
-  console.log(`\nXLSX file exported successfully: output.xlsx`);
+  console.log(`\nXLSX file exported successfully: ${filename}`);
   console.log(`Total records processed: ${data.length}`);
 }
 
@@ -201,7 +222,7 @@ async function processCustomerIdsInBatches(): Promise<any[]> {
   let batchNumber = 0;
 
   try {
-    const workbook = new ExcelJS.stream.xlsx.WorkbookReader("input.xlsx", {});
+    const workbook = new ExcelJS.stream.xlsx.WorkbookReader(inputFilePath, {});
     let headers: string[] = [];
     let customerIdColumnIndex = -1;
     let rowCount = 0;
@@ -296,11 +317,14 @@ async function processCustomerIdsInBatches(): Promise<any[]> {
 async function main() {
   console.log("Starting wallet generation process...");
 
+  // Generate output filename based on input filename
+  const outputFilename = `output_wallets.xlsx`;
+
   // Use pipeline approach: read and process in batches
   const results = await processCustomerIdsInBatches();
 
   // Export results to output file
-  await exportToXlsx(results);
+  await exportToXlsx(results, outputFilename);
 
   console.log("Process completed successfully!");
 }

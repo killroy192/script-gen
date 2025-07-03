@@ -7,7 +7,7 @@
   },
   "author": "Dzmitry Lahunouski",
   "license": "MIT",
-  "description": "",
+  "description": "Generate wallet addresses for customer IDs from Excel files using multi-threading and streaming",
   "devDependencies": {
     "@types/node": "^24.0.8",
     "ts-node": "^10.9.2",
